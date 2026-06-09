@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Inventaire">
+<meta name="theme-color" content="#1a2e4a">
+<title>Inventaire Immobilisations</title>
+
+<!-- PWA Manifest -->
+<link rel="manifest" href="/manifest.json">
+<!-- iOS PWA support -->
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-title" content="Inventaire">
+
+<!-- SheetJS for Excel export -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- ZXing for barcode/QR scanning -->
+<script src="https://unpkg.com/@zxing/library@0.21.0/umd/index.min.js"></script>
+
+<style>
+  :root {
+    --navy: #1a2e4a;
+    --navy-light: #243d61;
+    --accent: #e8a020;
+    --accent-light: #f5c060;
+    --green: #27ae60;
+    --red: #e74c3c;
+    --bg: #f0f4f8;
+    --card: #ffffff;
+    --text: #1a2e4a;
+    --muted: #6b7fa3;
+    --border: #d1dbe8;
+    --radius: 14px;
+    --shadow: 0 2px 16px rgba(26,46,74,0.10);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding-bottom: 80px;
+  }
+
+  /* HEADER */
+  header {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
+    color: white;
+    padding: 18px 20px 14px;
+    position: sticky; top: 0; z-index: 100;
+    box-shadow: 0 3px 20px rgba(26,46,74,0.25);
+  }
+  header .brand { display: flex; align-items: center; gap: 10px; }
+  header .icon { font-size: 24px; }
+  header h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.3px; }
+  header p { font-size: 12px; color: rgba(255,255,255,0.65); margin-top: 1px; }
+  .step-indicator {
+    display: flex; gap: 5px; margin-top: 12px;
+  }
+  .step-dot {
+    height: 4px; flex: 1; border-radius: 2px;
+    background: rgba(255,255,255,0.2);
+    transition: background 0.3s;
+  }
+  .step-dot.active { background: var(--accent); }
+  .step-dot.done { background: var(--green); }
+
+  /* SCREENS */
+  .screen { display: none; padding: 20px; animation: fadeIn 0.25s ease; }
+  .screen.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* CARDS */
+  .card {
+    background: var(--card);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+  }
+  .card-title {
+    font-size: 13px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--muted); margin-bottom: 14px;
+    display: flex; align-items: center; gap: 7px;
+  }
+
+  /* INPUTS */
+  .field { margin-bottom: 16px; }
+  .field label {
+    display: block; font-size: 13px; font-weight: 600;
+    color: var(--navy); margin-bottom: 6px;
+  }
+  .field input {
+    width: 100%; padding: 13px 15px;
+    border: 2px solid var(--border); border-radius: 10px;
+    font-size: 16px; color: var(--text);
+    background: #f8fafc; outline: none;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .field input:focus {
+    border-color: var(--accent); background: white;
+  }
+  .field input::placeholder { color: #aab5c8; }
+
+  /* BUTTONS */
+  .btn {
+    width: 100%; padding: 15px;
+    border: none; border-radius: 11px;
+    font-size: 16px; font-weight: 700;
+    cursor: pointer; transition: all 0.18s; display: flex;
+    align-items: center; justify-content: center; gap: 8px;
+    letter-spacing: 0.3px;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-light));
+    color: var(--navy);
+  }
+  .btn-primary:active { transform: scale(0.97); }
+  .btn-success {
+    background: linear-gradient(135deg, var(--green), #2ecc71);
+    color: white;
+  }
+  .btn-danger {
+    background: linear-gradient(135deg, var(--red), #e55);
+    color: white;
+  }
+  .btn-outline {
+    background: transparent; color: var(--navy);
+    border: 2px solid var(--border);
+  }
+  .btn + .btn { margin-top: 10px; }
+
+  /* SCANNER SCREEN */
+  #scanner-screen { padding: 0; }
+  .scanner-header {
+    background: var(--navy); color: white;
+    padding: 16px 20px; display: flex; align-items: center; gap: 12px;
+  }
+  .scanner-header .info { flex: 1; }
+  .scanner-header h2 { font-size: 15px; font-weight: 700; }
+  .scanner-header p { font-size: 12px; color: rgba(255,255,255,0.6); }
+  .scan-count-badge {
+    background: var(--accent); color: var(--navy);
+    font-size: 13px; font-weight: 800;
+    padding: 4px 12px; border-radius: 20px; white-space: nowrap;
+  }
+
+  #video-container {
+    position: relative; width: 100%; background: #000;
+    overflow: hidden;
+  }
+  #video-container video {
+    width: 100%; display: block;
+    max-height: 45vh; object-fit: cover;
+  }
+  .scan-overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  .scan-frame {
+    width: 220px; height: 140px;
+    border: 3px solid var(--accent);
+    border-radius: 12px;
+    box-shadow: 0 0 0 4000px rgba(0,0,0,0.45);
+    position: relative;
+  }
+  .scan-line {
+    position: absolute; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    top: 50%;
+    animation: scan-anim 2s ease-in-out infinite;
+  }
+  @keyframes scan-anim {
+    0%,100% { top: 15%; } 50% { top: 85%; }
+  }
+  .corner { position: absolute; width: 18px; height: 18px; }
+  .corner-tl { top: -3px; left: -3px; border-top: 3px solid #fff; border-left: 3px solid #fff; border-radius: 3px 0 0 0; }
+  .corner-tr { top: -3px; right: -3px; border-top: 3px solid #fff; border-right: 3px solid #fff; border-radius: 0 3px 0 0; }
+  .corner-bl { bottom: -3px; left: -3px; border-bottom: 3px solid #fff; border-left: 3px solid #fff; border-radius: 0 0 0 3px; }
+  .corner-br { bottom: -3px; right: -3px; border-bottom: 3px solid #fff; border-right: 3px solid #fff; border-radius: 0 0 3px 0; }
+
+  #scan-feedback {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(39,174,96,0.92); color: white;
+    padding: 6px 18px; border-radius: 20px;
+    font-size: 13px; font-weight: 700;
+    opacity: 0; transition: opacity 0.2s; white-space: nowrap;
+    pointer-events: none;
+  }
+  #scan-feedback.show { opacity: 1; }
+
+  /* SCAN LIST */
+  .scan-controls { padding: 14px 16px; background: white; display: flex; gap: 10px; }
+  .scan-controls .btn { flex: 1; padding: 12px; font-size: 14px; }
+
+  .scan-list-container { padding: 14px 16px; }
+  .scan-list-title {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--muted); margin-bottom: 10px;
+  }
+  .scan-item {
+    display: flex; align-items: center;
+    background: white; border-radius: 10px;
+    padding: 11px 14px; margin-bottom: 8px;
+    box-shadow: 0 1px 6px rgba(26,46,74,0.07);
+    border: 1px solid var(--border);
+    animation: slideIn 0.2s ease;
+    gap: 10px;
+  }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+  .scan-item .barcode-val {
+    flex: 1; font-size: 15px; font-weight: 600;
+    font-family: 'Courier New', monospace; color: var(--navy);
+  }
+  .scan-item .scan-time { font-size: 11px; color: var(--muted); }
+  .scan-item .del-btn {
+    background: none; border: none; color: var(--red);
+    font-size: 18px; cursor: pointer; padding: 4px; line-height: 1;
+  }
+  .scan-icon { font-size: 18px; }
+
+  /* SUMMARY */
+  .summary-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 12px; margin-bottom: 16px;
+  }
+  .summary-item {
+    background: var(--bg); border-radius: 10px;
+    padding: 14px 12px; border: 1px solid var(--border);
+  }
+  .summary-item .s-label { font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .summary-item .s-value { font-size: 16px; font-weight: 700; color: var(--navy); margin-top: 3px; word-break: break-word; }
+
+  .count-big {
+    text-align: center; padding: 20px;
+    background: linear-gradient(135deg, var(--navy), var(--navy-light));
+    border-radius: var(--radius); color: white; margin-bottom: 16px;
+  }
+  .count-big .num { font-size: 48px; font-weight: 800; color: var(--accent); line-height: 1; }
+  .count-big .lbl { font-size: 13px; color: rgba(255,255,255,0.7); margin-top: 4px; }
+
+  /* EMPTY STATE */
+  .empty-state { text-align: center; padding: 30px 20px; color: var(--muted); }
+  .empty-state .emoji { font-size: 40px; margin-bottom: 10px; }
+  .empty-state p { font-size: 14px; }
+
+  /* TOAST */
+  #toast {
+    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+    background: var(--navy); color: white;
+    padding: 10px 22px; border-radius: 25px;
+    font-size: 14px; font-weight: 600;
+    opacity: 0; transition: opacity 0.25s; z-index: 999;
+    pointer-events: none; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; }
+
+  /* BOTTOM NAV */
+  .bottom-nav {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: white; border-top: 1px solid var(--border);
+    display: flex; z-index: 200;
+    box-shadow: 0 -4px 20px rgba(26,46,74,0.08);
+  }
+  .nav-btn {
+    flex: 1; padding: 10px 6px;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    border: none; background: none; cursor: pointer;
+    font-size: 10px; font-weight: 600; color: var(--muted);
+    transition: color 0.2s; -webkit-tap-highlight-color: transparent;
+  }
+  .nav-btn.active { color: var(--accent); }
+  .nav-btn .nav-icon { font-size: 20px; }
+
+  .manual-input-row {
+    display: flex; gap: 10px; margin-bottom: 12px;
+  }
+  .manual-input-row input {
+    flex: 1; padding: 13px 15px; border: 2px solid var(--border);
+    border-radius: 10px; font-size: 15px; background: #f8fafc;
+    outline: none; font-family: 'Courier New', monospace;
+  }
+  .manual-input-row input:focus { border-color: var(--accent); background: white; }
+  .manual-input-row button {
+    padding: 0 18px; border: none;
+    background: var(--accent); color: var(--navy);
+    border-radius: 10px; font-weight: 700; font-size: 18px; cursor: pointer;
+  }
+
+  .camera-select {
+    width: 100%; padding: 10px 14px; margin-bottom: 12px;
+    border: 2px solid var(--border); border-radius: 10px;
+    font-size: 14px; background: #f8fafc; color: var(--text);
+    outline: none;
+  }
+
+  .warn-badge {
+    background: #fff3cd; border: 1px solid #ffc107;
+    border-radius: 10px; padding: 10px 14px;
+    font-size: 13px; color: #856404; margin-bottom: 12px;
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid rgba(255,255,255,0.4); border-top-color: white;
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- INSTALL BANNER -->
+<div id="install-banner" style="display:none; position:fixed; top:0; left:0; right:0; z-index:999;
+  background:linear-gradient(135deg,#e8a020,#f5c060); color:#1a2e4a;
+  padding:12px 16px; align-items:center; gap:12px;
+  font-size:13px; font-weight:700; box-shadow:0 3px 12px rgba(0,0,0,0.2);">
+  <span style="font-size:22px;">📲</span>
+  <span style="flex:1;">Installer l'appli sur cet appareil</span>
+  <button onclick="installApp()" style="background:#1a2e4a;color:white;border:none;
+    border-radius:8px;padding:7px 14px;font-weight:700;font-size:13px;cursor:pointer;">
+    Installer
+  </button>
+  <button onclick="document.getElementById('install-banner').style.display='none'"
+    style="background:none;border:none;font-size:20px;cursor:pointer;color:#1a2e4a;">✕</button>
+</div>
+
+<!-- HEADER -->
+<header>
+  <div class="brand">
+    <span class="icon">📦</span>
+    <div>
+      <h1>Inventaire Immobilisations</h1>
+      <p id="header-subtitle">Nouvelle session</p>
+    </div>
+  </div>
+  <div class="step-indicator">
+    <div class="step-dot" id="dot-0"></div>
+    <div class="step-dot" id="dot-1"></div>
+    <div class="step-dot" id="dot-2"></div>
+    <div class="step-dot" id="dot-3"></div>
+  </div>
+</header>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- ===== SCREEN 1: INFO ===== -->
+<div class="screen active" id="screen-info">
+  <div class="card">
+    <div class="card-title">📍 Identification du lieu</div>
+    <div class="field">
+      <label>Localisation / Site</label>
+      <input type="text" id="inp-localisation" placeholder="ex: Siège Alger – Bât. A" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Numéro de bureau / Salle</label>
+      <input type="text" id="inp-bureau" placeholder="ex: Bureau 214" autocomplete="off">
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label>Occupant du bureau</label>
+      <input type="text" id="inp-occupant" placeholder="ex: Mohamed Benali" autocomplete="off">
+    </div>
+  </div>
+  <button class="btn btn-primary" onclick="goToScanner()">
+    📷 Commencer le scan →
+  </button>
+</div>
+
+<!-- ===== SCREEN 2: SCANNER ===== -->
+<div class="screen" id="screen-scanner">
+  <div id="scanner-content">
+    <div class="scanner-header">
+      <div class="info">
+        <h2 id="scan-location-label">—</h2>
+        <p id="scan-bureau-label">—</p>
+      </div>
+      <div class="scan-count-badge" id="scan-count-badge">0 articles</div>
+    </div>
+
+    <div id="video-container">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="scan-overlay">
+        <div class="scan-frame">
+          <div class="scan-line"></div>
+          <div class="corner corner-tl"></div>
+          <div class="corner corner-tr"></div>
+          <div class="corner corner-bl"></div>
+          <div class="corner corner-br"></div>
+        </div>
+      </div>
+      <div id="scan-feedback">✓ Scanné !</div>
+    </div>
+
+    <div class="scan-controls">
+      <button class="btn btn-outline" onclick="toggleManual()" id="btn-manual" style="font-size:13px;">⌨️ Manuel</button>
+      <button class="btn btn-primary" onclick="goToFinish()" style="flex:2;">✅ Terminer l'inventaire</button>
+    </div>
+
+    <div id="manual-panel" style="display:none; padding:0 16px 4px;">
+      <div class="manual-input-row">
+        <input type="text" id="manual-code" placeholder="Code-barre ou QR" autocomplete="off">
+        <button onclick="addManual()">+</button>
+      </div>
+    </div>
+
+    <div id="cam-select-panel" style="padding:0 16px;">
+      <select class="camera-select" id="cam-select" onchange="switchCamera(this.value)" style="display:none;"></select>
+    </div>
+
+    <div class="scan-list-container">
+      <div class="scan-list-title" id="scan-list-header">Immobilisations scannées</div>
+      <div id="scan-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SCREEN 3: RÉSUMÉ / EXPORT ===== -->
+<div class="screen" id="screen-summary">
+  <div class="count-big">
+    <div class="num" id="total-count">0</div>
+    <div class="lbl">immobilisations inventoriées</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📋 Récapitulatif</div>
+    <div class="summary-grid">
+      <div class="summary-item">
+        <div class="s-label">📍 Localisation</div>
+        <div class="s-value" id="sum-loc">—</div>
+      </div>
+      <div class="summary-item">
+        <div class="s-label">🚪 Bureau</div>
+        <div class="s-value" id="sum-bureau">—</div>
+      </div>
+      <div class="summary-item">
+        <div class="s-label">👤 Occupant</div>
+        <div class="s-value" id="sum-occupant">—</div>
+      </div>
+      <div class="summary-item">
+        <div class="s-label">📅 Date</div>
+        <div class="s-value" id="sum-date">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="preview-card">
+    <div class="card-title">👁️ Aperçu (5 premiers)</div>
+    <div id="preview-list"></div>
+  </div>
+
+  <button class="btn btn-success" onclick="exportExcel()" id="btn-export">
+    📊 Générer & Télécharger Excel
+  </button>
+  <button class="btn btn-primary" onclick="sendEmail()" style="margin-top:10px;">
+    ✉️ Envoyer par e-mail
+  </button>
+  <button class="btn btn-outline" onclick="newInventory()" style="margin-top:10px;">
+    🔄 Nouvel inventaire
+  </button>
+</div>
+
+<!-- BOTTOM NAV -->
+<nav class="bottom-nav">
+  <button class="nav-btn active" id="nav-info" onclick="navTo(0)">
+    <span class="nav-icon">📝</span>Info
+  </button>
+  <button class="nav-btn" id="nav-scan" onclick="navTo(1)">
+    <span class="nav-icon">📷</span>Scanner
+  </button>
+  <button class="nav-btn" id="nav-summary" onclick="navTo(2)">
+    <span class="nav-icon">📊</span>Rapport
+  </button>
+</nav>
+
+<script>
+/* ===================== STATE ===================== */
+let scans = [];       // { code, time }
+let info = {};
+let codeReader = null;
+let selectedDeviceId = null;
+let scanning = false;
+let lastCode = '';
+let lastCodeTime = 0;
+let feedbackTimer = null;
+
+/* ===================== NAVIGATION ===================== */
+const screens = ['screen-info','screen-scanner','screen-summary'];
+const navBtns = ['nav-info','nav-scan','nav-summary'];
+const dots = ['dot-0','dot-1','dot-2','dot-3'];
+let currentScreen = 0;
+
+function navTo(idx) {
+  if (idx === 1 && !validateInfo()) return;
+  if (idx === 2) updateSummary();
+  
+  screens.forEach((id,i) => {
+    document.getElementById(id).classList.toggle('active', i === idx);
+  });
+  navBtns.forEach((id,i) => {
+    document.getElementById(id).classList.toggle('active', i === idx);
+  });
+  currentScreen = idx;
+  updateDots();
+  
+  if (idx === 1) startScanner();
+  else stopScanner();
+}
+
+function updateDots() {
+  dots.forEach((id, i) => {
+    const el = document.getElementById(id);
+    el.className = 'step-dot';
+    if (i < currentScreen) el.classList.add('done');
+    else if (i === currentScreen) el.classList.add('active');
+  });
+}
+updateDots();
+
+/* ===================== VALIDATION ===================== */
+function validateInfo() {
+  const loc = document.getElementById('inp-localisation').value.trim();
+  const bureau = document.getElementById('inp-bureau').value.trim();
+  const occupant = document.getElementById('inp-occupant').value.trim();
+  if (!loc || !bureau || !occupant) {
+    showToast('⚠️ Remplissez tous les champs');
+    navTo(0);
+    return false;
+  }
+  info = { loc, bureau, occupant };
+  document.getElementById('header-subtitle').textContent = `${loc} — ${bureau}`;
+  document.getElementById('scan-location-label').textContent = loc;
+  document.getElementById('scan-bureau-label').textContent = `${bureau} · ${occupant}`;
+  return true;
+}
+
+function goToScanner() {
+  if (validateInfo()) navTo(1);
+}
+
+function goToFinish() {
+  if (scans.length === 0) {
+    showToast('⚠️ Aucun article scanné');
+    return;
+  }
+  stopScanner();
+  navTo(2);
+}
+
+/* ===================== SCANNER ===================== */
+async function startScanner() {
+  if (scanning) return;
+  scanning = true;
+
+  if (!window.ZXing) {
+    showToast('⚠️ Bibliothèque scanner indisponible');
+    return;
+  }
+
+  try {
+    codeReader = new ZXing.BrowserMultiFormatReader();
+    const devices = await codeReader.listVideoInputDevices();
+    
+    // Prefer rear camera
+    const rear = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1];
+    selectedDeviceId = rear ? rear.deviceId : undefined;
+
+    // Populate camera selector if multiple
+    const sel = document.getElementById('cam-select');
+    if (devices.length > 1) {
+      sel.innerHTML = '';
+      devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.text = d.label || `Caméra ${d.deviceId.slice(0,6)}`;
+        if (d.deviceId === selectedDeviceId) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.style.display = 'block';
+    }
+
+    await codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
+      if (result) handleScan(result.getText());
+    });
+  } catch(e) {
+    showToast('📷 Accès caméra refusé');
+    console.error(e);
+    scanning = false;
+  }
+}
+
+async function switchCamera(deviceId) {
+  stopScanner();
+  scanning = false;
+  selectedDeviceId = deviceId;
+  await startScanner();
+}
+
+function stopScanner() {
+  if (codeReader) {
+    try { codeReader.reset(); } catch(e) {}
+    codeReader = null;
+  }
+  scanning = false;
+}
+
+/* ===================== SCAN HANDLING ===================== */
+function handleScan(code) {
+  const now = Date.now();
+  // Debounce: ignore same code within 2s
+  if (code === lastCode && now - lastCodeTime < 2000) return;
+  lastCode = code;
+  lastCodeTime = now;
+
+  addScan(code);
+  showScanFeedback();
+  // Vibrate
+  if (navigator.vibrate) navigator.vibrate(60);
+}
+
+function addScan(code) {
+  const now = new Date();
+  const time = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  scans.push({ code, time, fullDate: now });
+  renderScanList();
+  updateBadge();
+}
+
+function addManual() {
+  const inp = document.getElementById('manual-code');
+  const code = inp.value.trim();
+  if (!code) return;
+  addScan(code);
+  inp.value = '';
+  showToast('✓ Ajouté manuellement');
+}
+
+function deleteScan(idx) {
+  scans.splice(idx, 1);
+  renderScanList();
+  updateBadge();
+}
+
+function renderScanList() {
+  const list = document.getElementById('scan-list');
+  if (scans.length === 0) {
+    list.innerHTML = `<div class="empty-state"><div class="emoji">🔍</div><p>Pointez la caméra sur un code-barre ou QR</p></div>`;
+    return;
+  }
+  // Show last 20, newest first
+  const display = [...scans].reverse().slice(0, 20);
+  list.innerHTML = display.map((s, i) => {
+    const realIdx = scans.length - 1 - i;
+    return `
+    <div class="scan-item">
+      <span class="scan-icon">${s.code.length > 20 ? '🔲' : '▋'}</span>
+      <span class="barcode-val">${s.code}</span>
+      <span class="scan-time">${s.time}</span>
+      <button class="del-btn" onclick="deleteScan(${realIdx})">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function updateBadge() {
+  const n = scans.length;
+  document.getElementById('scan-count-badge').textContent = `${n} article${n>1?'s':''}`;
+  document.getElementById('scan-list-header').textContent = `Immobilisations scannées (${n})`;
+}
+
+function showScanFeedback() {
+  const el = document.getElementById('scan-feedback');
+  el.classList.add('show');
+  if (feedbackTimer) clearTimeout(feedbackTimer);
+  feedbackTimer = setTimeout(() => el.classList.remove('show'), 900);
+}
+
+function toggleManual() {
+  const p = document.getElementById('manual-panel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  if (p.style.display === 'block') document.getElementById('manual-code').focus();
+}
+
+/* ===================== SUMMARY ===================== */
+function updateSummary() {
+  if (!validateInfo()) return;
+  const now = new Date();
+  document.getElementById('total-count').textContent = scans.length;
+  document.getElementById('sum-loc').textContent = info.loc;
+  document.getElementById('sum-bureau').textContent = info.bureau;
+  document.getElementById('sum-occupant').textContent = info.occupant;
+  document.getElementById('sum-date').textContent = now.toLocaleDateString('fr-FR');
+
+  // Preview
+  const prev = document.getElementById('preview-list');
+  if (scans.length === 0) {
+    prev.innerHTML = '<div class="empty-state"><div class="emoji">📭</div><p>Aucun article scanné</p></div>';
+    return;
+  }
+  prev.innerHTML = scans.slice(0, 5).map((s, i) =>
+    `<div class="scan-item" style="margin-bottom:6px;">
+      <span style="font-size:12px;color:var(--muted);width:22px;text-align:center;">${i+1}</span>
+      <span class="barcode-val">${s.code}</span>
+      <span class="scan-time">${s.time}</span>
+    </div>`
+  ).join('') + (scans.length > 5 ? `<p style="text-align:center;color:var(--muted);font-size:12px;margin-top:8px;">+ ${scans.length - 5} autres…</p>` : '');
+}
+
+/* ===================== EXCEL EXPORT ===================== */
+function exportExcel() {
+  const btn = document.getElementById('btn-export');
+  btn.innerHTML = `<span class="spinner"></span> Génération…`;
+  btn.disabled = true;
+
+  setTimeout(() => {
+    try {
+      const wb = XLSX.utils.book_new();
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('fr-FR');
+      const timeStr = now.toLocaleTimeString('fr-FR');
+
+      /* === Sheet 1: Données inventaire === */
+      const data = [
+        ['INVENTAIRE DES IMMOBILISATIONS', '', '', '', '', ''],
+        ['', '', '', '', '', ''],
+        ['Localisation', info.loc, '', 'Date inventaire', dateStr, ''],
+        ['Bureau', info.bureau, '', 'Heure', timeStr, ''],
+        ['Occupant', info.occupant, '', 'Nb articles', scans.length, ''],
+        ['', '', '', '', '', ''],
+        ['N°', 'Code immobilisation', 'Type', 'Date scan', 'Heure scan', 'Observations'],
+        ...scans.map((s, i) => [
+          i + 1,
+          s.code,
+          s.code.length > 20 ? 'QR Code' : 'Code-barre',
+          s.fullDate.toLocaleDateString('fr-FR'),
+          s.fullDate.toLocaleTimeString('fr-FR'),
+          ''
+        ])
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet(data);
+
+      // Column widths
+      ws['!cols'] = [
+        {wch: 5}, {wch: 35}, {wch: 14}, {wch: 16}, {wch: 14}, {wch: 22}
+      ];
+
+      // Merge title
+      ws['!merges'] = [
+        { s: {r:0,c:0}, e: {r:0,c:5} }
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Inventaire');
+
+      /* === Sheet 2: Récapitulatif === */
+      const recapData = [
+        ['RÉCAPITULATIF', ''],
+        ['', ''],
+        ['Localisation', info.loc],
+        ['Bureau', info.bureau],
+        ['Occupant', info.occupant],
+        ['Date', dateStr],
+        ['Heure', timeStr],
+        ['Nombre d\'articles', scans.length],
+        ['', ''],
+        ['CODES UNIQUES', scans.length],
+        ['Doublons', scans.length - new Set(scans.map(s=>s.code)).size],
+      ];
+      const ws2 = XLSX.utils.aoa_to_sheet(recapData);
+      ws2['!cols'] = [{wch: 24}, {wch: 30}];
+      XLSX.utils.book_append_sheet(wb, ws2, 'Récapitulatif');
+
+      // File name: date + location
+      const safeLoc = info.loc.replace(/[^a-zA-Z0-9\u00C0-\u024F\s]/g,'').replace(/\s+/g,'_');
+      const dateFile = now.toISOString().slice(0,10);
+      const filename = `Inventaire_${safeLoc}_${dateFile}.xlsx`;
+
+      XLSX.writeFile(wb, filename);
+      showToast('✅ Excel téléchargé !');
+    } catch(e) {
+      showToast('❌ Erreur export: ' + e.message);
+    }
+
+    btn.innerHTML = '📊 Générer & Télécharger Excel';
+    btn.disabled = false;
+  }, 100);
+}
+
+/* ===================== EMAIL ===================== */
+function sendEmail() {
+  const now = new Date();
+  const subject = encodeURIComponent(`Inventaire ${info.loc} – ${info.bureau} – ${now.toLocaleDateString('fr-FR')}`);
+  const body = encodeURIComponent(
+    `Bonjour,\n\nVeuillez trouver ci-joint le rapport d'inventaire des immobilisations.\n\n` +
+    `📍 Localisation : ${info.loc}\n` +
+    `🚪 Bureau : ${info.bureau}\n` +
+    `👤 Occupant : ${info.occupant}\n` +
+    `📅 Date : ${now.toLocaleDateString('fr-FR')} à ${now.toLocaleTimeString('fr-FR')}\n` +
+    `📦 Articles inventoriés : ${scans.length}\n\n` +
+    `Codes scannés :\n${scans.map((s,i) => `${i+1}. ${s.code}`).join('\n')}\n\n` +
+    `Cordialement`
+  );
+  showToast('📧 Ouverture messagerie…');
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+}
+
+/* ===================== RESET ===================== */
+function newInventory() {
+  if (!confirm('Démarrer un nouvel inventaire ? Les données actuelles seront effacées.')) return;
+  scans = [];
+  info = {};
+  document.getElementById('inp-localisation').value = '';
+  document.getElementById('inp-bureau').value = '';
+  document.getElementById('inp-occupant').value = '';
+  document.getElementById('header-subtitle').textContent = 'Nouvelle session';
+  lastCode = '';
+  renderScanList();
+  updateBadge();
+  navTo(0);
+}
+
+/* ===================== TOAST ===================== */
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* ===================== SERVICE WORKER ===================== */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then(reg => console.log('SW registered:', reg.scope))
+      .catch(err => console.warn('SW error:', err));
+  });
+}
+
+/* ===================== PWA INSTALL PROMPT ===================== */
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  // Show install button
+  const banner = document.getElementById('install-banner');
+  if (banner) banner.style.display = 'flex';
+});
+window.addEventListener('appinstalled', () => {
+  const banner = document.getElementById('install-banner');
+  if (banner) banner.style.display = 'none';
+  showToast('✅ Application installée !');
+  deferredPrompt = null;
+});
+function installApp() {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  deferredPrompt.userChoice.then(r => {
+    deferredPrompt = null;
+    document.getElementById('install-banner').style.display = 'none';
+  });
+}
+
+/* ===================== MANUAL CODE ENTER ===================== */
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('manual-code');
+  if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
+  renderScanList();
+});
+</script>
+</body>
+</html>
