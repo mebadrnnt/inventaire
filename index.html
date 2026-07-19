@@ -227,6 +227,27 @@
   }
   .scan-icon { font-size: 18px; }
 
+  /* DUPLICATES */
+  .dup-count-badge {
+    background: var(--red); color: white;
+    font-size: 12px; font-weight: 800;
+    padding: 4px 11px; border-radius: 20px; white-space: nowrap;
+    display: none; align-items: center; gap: 4px;
+  }
+  .dup-count-badge.show { display: flex; }
+  .scan-item.duplicate {
+    background: #fff5f5;
+    border: 1.5px solid var(--red);
+  }
+  .scan-item.duplicate .barcode-val { color: var(--red); }
+  .dup-tag {
+    background: var(--red); color: white;
+    font-size: 10px; font-weight: 800;
+    padding: 2px 7px; border-radius: 8px;
+    letter-spacing: 0.3px; white-space: nowrap;
+  }
+  #scan-feedback.duplicate-fb { background: rgba(231,76,60,0.94); }
+
   /* SUMMARY */
   .summary-grid {
     display: grid; grid-template-columns: 1fr 1fr;
@@ -386,6 +407,7 @@
         <p id="scan-bureau-label">—</p>
       </div>
       <div class="scan-count-badge" id="scan-count-badge">0 articles</div>
+      <div class="dup-count-badge" id="dup-count-badge">⚠️ 0</div>
     </div>
 
     <div id="video-container">
@@ -450,6 +472,10 @@
       <div class="summary-item">
         <div class="s-label">📅 Date</div>
         <div class="s-value" id="sum-date">—</div>
+      </div>
+      <div class="summary-item" id="sum-dup-item" style="display:none;">
+        <div class="s-label">⚠️ Doublons</div>
+        <div class="s-value" id="sum-dup" style="color:var(--red);">0</div>
       </div>
     </div>
   </div>
@@ -568,7 +594,28 @@ async function startScanner() {
   }
 
   try {
-    codeReader = new ZXing.BrowserMultiFormatReader();
+    // Active la lecture simultanée de TOUS les formats : codes-barres 1D et QR/2D
+    const hints = new Map();
+    const formats = [
+      ZXing.BarcodeFormat.QR_CODE,
+      ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.AZTEC,
+      ZXing.BarcodeFormat.PDF_417,
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.CODE_93,
+      ZXing.BarcodeFormat.CODABAR,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.UPC_A,
+      ZXing.BarcodeFormat.UPC_E,
+      ZXing.BarcodeFormat.ITF,
+      ZXing.BarcodeFormat.RSS_14
+    ];
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+    codeReader = new ZXing.BrowserMultiFormatReader(hints);
     const devices = await codeReader.listVideoInputDevices();
     
     // Prefer rear camera
@@ -622,10 +669,11 @@ function handleScan(code) {
   lastCode = code;
   lastCodeTime = now;
 
+  const isDup = scans.some(s => s.code === code);
   addScan(code);
-  showScanFeedback();
-  // Vibrate
-  if (navigator.vibrate) navigator.vibrate(60);
+  showScanFeedback(isDup);
+  // Vibrate: pattern différent pour un doublon
+  if (navigator.vibrate) navigator.vibrate(isDup ? [40, 60, 40, 60, 40] : 60);
 }
 
 function addScan(code) {
@@ -640,9 +688,10 @@ function addManual() {
   const inp = document.getElementById('manual-code');
   const code = inp.value.trim();
   if (!code) return;
+  const isDup = scans.some(s => s.code === code);
   addScan(code);
   inp.value = '';
-  showToast('✓ Ajouté manuellement');
+  showToast(isDup ? '⚠️ Ajouté (doublon détecté)' : '✓ Ajouté manuellement');
 }
 
 function deleteScan(idx) {
@@ -659,12 +708,18 @@ function renderScanList() {
   }
   // Show last 20, newest first
   const display = [...scans].reverse().slice(0, 20);
+  // Compter les occurrences de chaque code pour repérer les doublons
+  const counts = {};
+  scans.forEach(s => { counts[s.code] = (counts[s.code] || 0) + 1; });
+
   list.innerHTML = display.map((s, i) => {
     const realIdx = scans.length - 1 - i;
+    const dup = counts[s.code] > 1;
     return `
-    <div class="scan-item">
+    <div class="scan-item${dup ? ' duplicate' : ''}">
       <span class="scan-icon">${s.code.length > 20 ? '🔲' : '▋'}</span>
       <span class="barcode-val">${s.code}</span>
+      ${dup ? `<span class="dup-tag">DOUBLON ×${counts[s.code]}</span>` : ''}
       <span class="scan-time">${s.time}</span>
       <button class="del-btn" onclick="deleteScan(${realIdx})">✕</button>
     </div>`;
@@ -675,13 +730,25 @@ function updateBadge() {
   const n = scans.length;
   document.getElementById('scan-count-badge').textContent = `${n} article${n>1?'s':''}`;
   document.getElementById('scan-list-header').textContent = `Immobilisations scannées (${n})`;
+
+  const uniqueCount = new Set(scans.map(s => s.code)).size;
+  const dupCount = n - uniqueCount;
+  const dupBadge = document.getElementById('dup-count-badge');
+  if (dupCount > 0) {
+    dupBadge.textContent = `⚠️ ${dupCount} doublon${dupCount>1?'s':''}`;
+    dupBadge.classList.add('show');
+  } else {
+    dupBadge.classList.remove('show');
+  }
 }
 
-function showScanFeedback() {
+function showScanFeedback(isDup) {
   const el = document.getElementById('scan-feedback');
+  el.textContent = isDup ? '⚠️ Doublon détecté !' : '✓ Scanné !';
+  el.classList.toggle('duplicate-fb', !!isDup);
   el.classList.add('show');
   if (feedbackTimer) clearTimeout(feedbackTimer);
-  feedbackTimer = setTimeout(() => el.classList.remove('show'), 900);
+  feedbackTimer = setTimeout(() => el.classList.remove('show'), 1100);
 }
 
 function toggleManual() {
@@ -700,19 +767,29 @@ function updateSummary() {
   document.getElementById('sum-occupant').textContent = info.occupant;
   document.getElementById('sum-date').textContent = now.toLocaleDateString('fr-FR');
 
+  const uniqueCount = new Set(scans.map(s => s.code)).size;
+  const dupCount = scans.length - uniqueCount;
+  const dupItem = document.getElementById('sum-dup-item');
+  document.getElementById('sum-dup').textContent = dupCount;
+  dupItem.style.display = dupCount > 0 ? 'block' : 'none';
+
   // Preview
+  const counts = {};
+  scans.forEach(s => { counts[s.code] = (counts[s.code] || 0) + 1; });
   const prev = document.getElementById('preview-list');
   if (scans.length === 0) {
     prev.innerHTML = '<div class="empty-state"><div class="emoji">📭</div><p>Aucun article scanné</p></div>';
     return;
   }
-  prev.innerHTML = scans.slice(0, 5).map((s, i) =>
-    `<div class="scan-item" style="margin-bottom:6px;">
+  prev.innerHTML = scans.slice(0, 5).map((s, i) => {
+    const dup = counts[s.code] > 1;
+    return `<div class="scan-item${dup ? ' duplicate' : ''}" style="margin-bottom:6px;">
       <span style="font-size:12px;color:var(--muted);width:22px;text-align:center;">${i+1}</span>
       <span class="barcode-val">${s.code}</span>
+      ${dup ? `<span class="dup-tag">DOUBLON</span>` : ''}
       <span class="scan-time">${s.time}</span>
-    </div>`
-  ).join('') + (scans.length > 5 ? `<p style="text-align:center;color:var(--muted);font-size:12px;margin-top:8px;">+ ${scans.length - 5} autres…</p>` : '');
+    </div>`;
+  }).join('') + (scans.length > 5 ? `<p style="text-align:center;color:var(--muted);font-size:12px;margin-top:8px;">+ ${scans.length - 5} autres…</p>` : '');
 }
 
 /* ===================== EXCEL EXPORT ===================== */
