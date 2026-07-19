@@ -594,10 +594,12 @@ async function startScanner() {
   }
 
   try {
-    // Le lecteur par défaut (sans hints restrictifs) essaie déjà TOUS les
-    // formats disponibles (QR, DataMatrix, Aztec, PDF417, EAN, UPC, Code128, Code39...)
-    // simultanément à chaque frame — c'est le comportement le plus fiable.
-    codeReader = new ZXing.BrowserMultiFormatReader();
+    // TRY_HARDER seul (sans restreindre les formats) : le décodeur passe plus de
+    // temps/algorithmes à essayer de lire un code difficile (petit, flou, incliné,
+    // faible contraste) sans jamais empêcher la lecture d'un format en particulier.
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    codeReader = new ZXing.BrowserMultiFormatReader(hints);
     const devices = await codeReader.listVideoInputDevices();
     
     // Prefer rear camera
@@ -618,18 +620,53 @@ async function startScanner() {
       sel.style.display = 'block';
     }
 
-    await codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
+    const onDecode = (result, err) => {
       if (result) handleScan(result.getText());
       // Diagnostic : signale une vraie erreur (pas juste "aucun code visible")
       if (err && err.name && err.name !== 'NotFoundException' && err.name !== 'ChecksumException' && err.name !== 'FormatException') {
         console.error('Erreur scanner ZXing:', err);
       }
-    });
+    };
+
+    // Demande une résolution plus élevée à la caméra : les petits QR codes /
+    // codes-barres lointains ou serrés sont bien mieux lus avec plus de pixels.
+    // On retombe sur decodeFromVideoDevice si decodeFromConstraints n'est pas dispo.
+    if (typeof codeReader.decodeFromConstraints === 'function') {
+      const videoConstraints = selectedDeviceId
+        ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+        : { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+      try {
+        await codeReader.decodeFromConstraints({ video: videoConstraints, audio: false }, 'video', onDecode);
+      } catch (constraintErr) {
+        // Résolution demandée refusée par la caméra → repli sur le mode standard
+        console.warn('Contraintes vidéo HD refusées, repli standard:', constraintErr);
+        await codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', onDecode);
+      }
+    } else {
+      await codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', onDecode);
+    }
+
+    // Active la mise au point continue si le téléphone le permet : évite les
+    // QR flous car la caméra reste bloquée sur une mise au point fixe.
+    tryEnableContinuousFocus();
   } catch(e) {
     showToast('📷 Accès caméra refusé');
     console.error(e);
     scanning = false;
   }
+}
+
+function tryEnableContinuousFocus() {
+  try {
+    const videoEl = document.getElementById('video');
+    const stream = videoEl && videoEl.srcObject;
+    const track = stream && stream.getVideoTracks && stream.getVideoTracks()[0];
+    if (!track || !track.getCapabilities) return;
+    const caps = track.getCapabilities();
+    if (caps.focusMode && caps.focusMode.includes('continuous')) {
+      track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+    }
+  } catch (e) { /* non bloquant : certains navigateurs ne supportent pas cette API */ }
 }
 
 async function switchCamera(deviceId) {
