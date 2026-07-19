@@ -247,6 +247,7 @@
     letter-spacing: 0.3px; white-space: nowrap;
   }
   #scan-feedback.duplicate-fb { background: rgba(231,76,60,0.94); }
+  #scan-feedback.error-fb { background: rgba(30,30,30,0.94); }
 
   /* SUMMARY */
   .summary-grid {
@@ -606,6 +607,7 @@ let nativeLoopId = null;
 async function startScanner() {
   if (scanning) return;
   scanning = true;
+  getAudioCtx(); // active le son au plus près du geste utilisateur (requis sur mobile)
 
   // 1) Détection NATIVE (BarcodeDetector) : sur Android/Chrome, cette API utilise
   // directement le moteur ML Kit de Google — le même que l'appareil photo et
@@ -637,8 +639,14 @@ async function startScanner() {
     populateCameraSelect(devices);
 
     const onDecode = (result, err) => {
-      if (result) handleScan(result.getText());
-      if (err && err.name && err.name !== 'NotFoundException' && err.name !== 'ChecksumException' && err.name !== 'FormatException') {
+      if (result) { handleScan(result.getText()); return; }
+      if (err && err.name === 'ChecksumException' || err && err.name === 'FormatException') {
+        // Un code a bien été repéré par la caméra mais son contenu est
+        // corrompu/illisible (mauvais angle, reflet, code endommagé...)
+        playErrorSoundDebounced();
+        return;
+      }
+      if (err && err.name && err.name !== 'NotFoundException') {
         console.error('Erreur scanner ZXing:', err);
       }
     };
@@ -759,6 +767,53 @@ function stopScanner() {
   scanning = false;
 }
 
+/* ===================== SONS ===================== */
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { return null; }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
+function beep(freq, duration, type, delay, volume) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.value = freq;
+  const startTime = ctx.currentTime + (delay || 0);
+  gain.gain.setValueAtTime(volume || 0.22, startTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(startTime);
+  osc.stop(startTime + duration + 0.02);
+}
+
+// ✓ Lecture réussie : un bip aigu et net
+function playSuccessSound() { beep(1300, 0.09, 'sine', 0, 0.22); }
+// ⚠️ Doublon : deux bips moyens rapprochés
+function playDuplicateSound() {
+  beep(700, 0.08, 'square', 0, 0.18);
+  beep(700, 0.08, 'square', 0.13, 0.18);
+}
+// ❌ Lecture erronée (code détecté mais illisible/corrompu) : bip grave et dur
+function playErrorSound() { beep(180, 0.28, 'sawtooth', 0, 0.22); }
+
+let lastErrorBeepTime = 0;
+function playErrorSoundDebounced() {
+  const now = Date.now();
+  if (now - lastErrorBeepTime < 1500) return; // évite de spammer si le code reste illisible plusieurs frames
+  lastErrorBeepTime = now;
+  playErrorSound();
+  showScanFeedback('error');
+  if (navigator.vibrate) navigator.vibrate(200);
+}
+
 /* ===================== SCAN HANDLING ===================== */
 function handleScan(code) {
   const now = Date.now();
@@ -769,7 +824,8 @@ function handleScan(code) {
 
   const isDup = scans.some(s => s.code === code);
   addScan(code);
-  showScanFeedback(isDup);
+  showScanFeedback(isDup ? 'duplicate' : 'success');
+  if (isDup) playDuplicateSound(); else playSuccessSound();
   // Vibrate: pattern différent pour un doublon
   if (navigator.vibrate) navigator.vibrate(isDup ? [40, 60, 40, 60, 40] : 60);
 }
@@ -789,6 +845,7 @@ function addManual() {
   const isDup = scans.some(s => s.code === code);
   addScan(code);
   inp.value = '';
+  if (isDup) playDuplicateSound(); else playSuccessSound();
   showToast(isDup ? '⚠️ Ajouté (doublon détecté)' : '✓ Ajouté manuellement');
 }
 
@@ -851,10 +908,16 @@ function updateBadge() {
   }
 }
 
-function showScanFeedback(isDup) {
+function showScanFeedback(type) {
   const el = document.getElementById('scan-feedback');
-  el.textContent = isDup ? '⚠️ Doublon détecté !' : '✓ Scanné !';
-  el.classList.toggle('duplicate-fb', !!isDup);
+  const messages = {
+    success: '✓ Scanné !',
+    duplicate: '⚠️ Doublon détecté !',
+    error: '❌ Lecture illisible'
+  };
+  el.textContent = messages[type] || messages.success;
+  el.classList.toggle('duplicate-fb', type === 'duplicate');
+  el.classList.toggle('error-fb', type === 'error');
   el.classList.add('show');
   if (feedbackTimer) clearTimeout(feedbackTimer);
   feedbackTimer = setTimeout(() => el.classList.remove('show'), 1100);
