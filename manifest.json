@@ -2,13 +2,13 @@
   "name": "Inventaire Immobilisations",
   "short_name": "Inventaire",
   "description": "Application d'inventaire des immobilisations par scan de codes-barres et QR codes",
-  "start_url": "/index.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#1a2e4a",
   "theme_color": "#1a2e4a",
   "lang": "fr",
-  "scope": "/",
+  "scope": "./",
   "icons": [
     {
       "src": "icon-192.png",
