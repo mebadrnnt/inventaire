@@ -1,10 +1,10 @@
-const CACHE_NAME = 'inventaire-v1';
+const CACHE_NAME = 'inventaire-v2';
 
 const ASSETS = [
-  '/index.html',
-  '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png',
+  './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
   'https://unpkg.com/@zxing/library@0.21.0/umd/index.min.js'
 ];
@@ -38,7 +38,7 @@ self.addEventListener('fetch', event => {
         caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
         return response;
       }).catch(() => {
-        if (event.request.destination === 'document') return caches.match('/index.html');
+        if (event.request.destination === 'document') return caches.match('./index.html');
       });
     })
   );

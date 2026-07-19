@@ -11,9 +11,9 @@
 <title>Inventaire Immobilisations</title>
 
 <!-- PWA Manifest -->
-<link rel="manifest" href="/manifest.json">
+<link rel="manifest" href="./manifest.json">
 <!-- iOS PWA support -->
-<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
 <meta name="apple-mobile-web-app-title" content="Inventaire">
 
 <!-- SheetJS for Excel export -->
@@ -594,28 +594,10 @@ async function startScanner() {
   }
 
   try {
-    // Active la lecture simultanée de TOUS les formats : codes-barres 1D et QR/2D
-    const hints = new Map();
-    const formats = [
-      ZXing.BarcodeFormat.QR_CODE,
-      ZXing.BarcodeFormat.DATA_MATRIX,
-      ZXing.BarcodeFormat.AZTEC,
-      ZXing.BarcodeFormat.PDF_417,
-      ZXing.BarcodeFormat.CODE_128,
-      ZXing.BarcodeFormat.CODE_39,
-      ZXing.BarcodeFormat.CODE_93,
-      ZXing.BarcodeFormat.CODABAR,
-      ZXing.BarcodeFormat.EAN_13,
-      ZXing.BarcodeFormat.EAN_8,
-      ZXing.BarcodeFormat.UPC_A,
-      ZXing.BarcodeFormat.UPC_E,
-      ZXing.BarcodeFormat.ITF,
-      ZXing.BarcodeFormat.RSS_14
-    ];
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-
-    codeReader = new ZXing.BrowserMultiFormatReader(hints);
+    // Le lecteur par défaut (sans hints restrictifs) essaie déjà TOUS les
+    // formats disponibles (QR, DataMatrix, Aztec, PDF417, EAN, UPC, Code128, Code39...)
+    // simultanément à chaque frame — c'est le comportement le plus fiable.
+    codeReader = new ZXing.BrowserMultiFormatReader();
     const devices = await codeReader.listVideoInputDevices();
     
     // Prefer rear camera
@@ -638,6 +620,10 @@ async function startScanner() {
 
     await codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', (result, err) => {
       if (result) handleScan(result.getText());
+      // Diagnostic : signale une vraie erreur (pas juste "aucun code visible")
+      if (err && err.name && err.name !== 'NotFoundException' && err.name !== 'ChecksumException' && err.name !== 'FormatException') {
+        console.error('Erreur scanner ZXing:', err);
+      }
     });
   } catch(e) {
     showToast('📷 Accès caméra refusé');
@@ -916,7 +902,7 @@ function showToast(msg) {
 /* ===================== SERVICE WORKER ===================== */
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
+    navigator.serviceWorker.register('./sw.js')
       .then(reg => console.log('SW registered:', reg.scope))
       .catch(err => console.warn('SW error:', err));
   });
