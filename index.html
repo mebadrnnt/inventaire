@@ -405,6 +405,7 @@
       <div class="info">
         <h2 id="scan-location-label">—</h2>
         <p id="scan-bureau-label">—</p>
+        <p id="engine-label" style="font-size:10px;color:var(--accent-light);margin-top:2px;"></p>
       </div>
       <div class="scan-count-badge" id="scan-count-badge">0 articles</div>
       <div class="dup-count-badge" id="dup-count-badge">⚠️ 0</div>
@@ -432,8 +433,13 @@
     <div id="manual-panel" style="display:none; padding:0 16px 4px;">
       <div class="manual-input-row">
         <input type="text" id="manual-code" placeholder="Code-barre ou QR" autocomplete="off">
+        <button onclick="pasteFromClipboard()" title="Coller depuis le presse-papier" style="background:var(--navy-light);color:white;">📋</button>
         <button onclick="addManual()">+</button>
       </div>
+      <p style="font-size:11px;color:var(--muted);margin:-6px 0 12px;padding:0 2px;">
+        💡 Le QR ne se lit pas ? Scannez-le avec l'appareil photo du téléphone, puis
+        <b>partagez</b> le résultat vers cette app, ou copiez-le et appuyez sur 📋.
+      </p>
     </div>
 
     <div id="cam-select-panel" style="padding:0 16px;">
@@ -571,7 +577,15 @@ function validateInfo() {
 }
 
 function goToScanner() {
-  if (validateInfo()) navTo(1);
+  if (validateInfo()) {
+    navTo(1);
+    if (sharedCode) {
+      const isDup = scans.some(s => s.code === sharedCode);
+      addScan(sharedCode);
+      showToast(isDup ? '⚠️ Code partagé ajouté (doublon)' : '✓ Code partagé ajouté !');
+      sharedCode = null;
+    }
+  }
 }
 
 function goToFinish() {
@@ -584,53 +598,51 @@ function goToFinish() {
 }
 
 /* ===================== SCANNER ===================== */
+let usingNativeScanner = false;
+let nativeDetector = null;
+let nativeStream = null;
+let nativeLoopId = null;
+
 async function startScanner() {
   if (scanning) return;
   scanning = true;
 
+  // 1) Détection NATIVE (BarcodeDetector) : sur Android/Chrome, cette API utilise
+  // directement le moteur ML Kit de Google — le même que l'appareil photo et
+  // Google Lens. C'est nettement plus rapide et fiable que ZXing (JS pur).
+  if ('BarcodeDetector' in window) {
+    try {
+      await startNativeScanner();
+      return;
+    } catch (e) {
+      console.warn('Scanner natif indisponible, repli sur ZXing:', e);
+      usingNativeScanner = false;
+      // on continue vers le repli ZXing ci-dessous
+    }
+  }
+
+  // 2) Repli : ZXing (bibliothèque JS), utilisé si le navigateur ne supporte pas
+  // la détection native (ex: Safari/iPhone plus anciens).
   if (!window.ZXing) {
     showToast('⚠️ Bibliothèque scanner indisponible');
+    scanning = false;
     return;
   }
 
   try {
-    // TRY_HARDER seul (sans restreindre les formats) : le décodeur passe plus de
-    // temps/algorithmes à essayer de lire un code difficile (petit, flou, incliné,
-    // faible contraste) sans jamais empêcher la lecture d'un format en particulier.
     const hints = new Map();
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     codeReader = new ZXing.BrowserMultiFormatReader(hints);
     const devices = await codeReader.listVideoInputDevices();
-    
-    // Prefer rear camera
-    const rear = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1];
-    selectedDeviceId = rear ? rear.deviceId : undefined;
-
-    // Populate camera selector if multiple
-    const sel = document.getElementById('cam-select');
-    if (devices.length > 1) {
-      sel.innerHTML = '';
-      devices.forEach(d => {
-        const opt = document.createElement('option');
-        opt.value = d.deviceId;
-        opt.text = d.label || `Caméra ${d.deviceId.slice(0,6)}`;
-        if (d.deviceId === selectedDeviceId) opt.selected = true;
-        sel.appendChild(opt);
-      });
-      sel.style.display = 'block';
-    }
+    populateCameraSelect(devices);
 
     const onDecode = (result, err) => {
       if (result) handleScan(result.getText());
-      // Diagnostic : signale une vraie erreur (pas juste "aucun code visible")
       if (err && err.name && err.name !== 'NotFoundException' && err.name !== 'ChecksumException' && err.name !== 'FormatException') {
         console.error('Erreur scanner ZXing:', err);
       }
     };
 
-    // Demande une résolution plus élevée à la caméra : les petits QR codes /
-    // codes-barres lointains ou serrés sont bien mieux lus avec plus de pixels.
-    // On retombe sur decodeFromVideoDevice si decodeFromConstraints n'est pas dispo.
     if (typeof codeReader.decodeFromConstraints === 'function') {
       const videoConstraints = selectedDeviceId
         ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
@@ -638,7 +650,6 @@ async function startScanner() {
       try {
         await codeReader.decodeFromConstraints({ video: videoConstraints, audio: false }, 'video', onDecode);
       } catch (constraintErr) {
-        // Résolution demandée refusée par la caméra → repli sur le mode standard
         console.warn('Contraintes vidéo HD refusées, repli standard:', constraintErr);
         await codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', onDecode);
       }
@@ -646,13 +657,68 @@ async function startScanner() {
       await codeReader.decodeFromVideoDevice(selectedDeviceId, 'video', onDecode);
     }
 
-    // Active la mise au point continue si le téléphone le permet : évite les
-    // QR flous car la caméra reste bloquée sur une mise au point fixe.
     tryEnableContinuousFocus();
+    const lbl = document.getElementById('engine-label');
+    if (lbl) lbl.textContent = '';
   } catch(e) {
     showToast('📷 Accès caméra refusé');
     console.error(e);
     scanning = false;
+  }
+}
+
+/* --- Moteur natif (BarcodeDetector) --- */
+async function startNativeScanner() {
+  let supportedFormats = null;
+  try { supportedFormats = await BarcodeDetector.getSupportedFormats(); } catch(e) {}
+  const wanted = ['qr_code','ean_13','ean_8','code_128','code_39','code_93','codabar','itf','upc_a','upc_e','data_matrix','pdf_417','aztec'];
+  const formats = supportedFormats ? wanted.filter(f => supportedFormats.includes(f)) : wanted;
+  nativeDetector = new BarcodeDetector(formats.length ? { formats } : undefined);
+
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  populateCameraSelect(devices);
+
+  const videoConstraints = selectedDeviceId
+    ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    : { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+
+  nativeStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+  const videoEl = document.getElementById('video');
+  videoEl.srcObject = nativeStream;
+  await videoEl.play();
+  usingNativeScanner = true;
+  tryEnableContinuousFocus();
+  const lbl = document.getElementById('engine-label');
+  if (lbl) lbl.textContent = '🤖 Scanner natif (haute fiabilité)';
+
+  const loop = async () => {
+    if (!scanning || !usingNativeScanner) return;
+    try {
+      const codes = await nativeDetector.detect(videoEl);
+      if (codes && codes.length) handleScan(codes[0].rawValue);
+    } catch (e) { /* image illisible sur cette frame, on continue */ }
+    nativeLoopId = requestAnimationFrame(loop);
+  };
+  nativeLoopId = requestAnimationFrame(loop);
+}
+
+/* --- Sélection de la caméra arrière + remplissage du menu si plusieurs --- */
+function populateCameraSelect(devices) {
+  if (!selectedDeviceId) {
+    const rear = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[devices.length - 1];
+    selectedDeviceId = rear ? rear.deviceId : undefined;
+  }
+  const sel = document.getElementById('cam-select');
+  if (devices.length > 1) {
+    sel.innerHTML = '';
+    devices.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.text = d.label || `Caméra ${d.deviceId.slice(0,6)}`;
+      if (d.deviceId === selectedDeviceId) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.style.display = 'block';
   }
 }
 
@@ -681,6 +747,15 @@ function stopScanner() {
     try { codeReader.reset(); } catch(e) {}
     codeReader = null;
   }
+  if (nativeLoopId) {
+    cancelAnimationFrame(nativeLoopId);
+    nativeLoopId = null;
+  }
+  if (nativeStream) {
+    nativeStream.getTracks().forEach(t => t.stop());
+    nativeStream = null;
+  }
+  usingNativeScanner = false;
   scanning = false;
 }
 
@@ -715,6 +790,17 @@ function addManual() {
   addScan(code);
   inp.value = '';
   showToast(isDup ? '⚠️ Ajouté (doublon détecté)' : '✓ Ajouté manuellement');
+}
+
+async function pasteFromClipboard() {
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) { showToast('📋 Presse-papier vide'); return; }
+    document.getElementById('manual-code').value = text;
+    showToast('📋 Collé — vérifiez puis appuyez sur +');
+  } catch (e) {
+    showToast('⚠️ Accès presse-papier refusé');
+  }
 }
 
 function deleteScan(idx) {
@@ -974,7 +1060,42 @@ document.addEventListener('DOMContentLoaded', () => {
   const inp = document.getElementById('manual-code');
   if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') addManual(); });
   renderScanList();
+  captureSharedCode();
 });
+
+/* ===================== RÉCEPTION D'UN CODE PARTAGÉ ===================== */
+// Quand une autre appli (ex: appareil photo, Google Lens) "partage" le texte
+// d'un QR scanné vers cette app, GitHub Pages/le navigateur ouvre index.html
+// avec ?text=... ou ?url=... — on récupère ce code automatiquement.
+let sharedCode = null;
+function captureSharedCode() {
+  const params = new URLSearchParams(window.location.search);
+  const shared = (params.get('text') || params.get('url') || params.get('title') || '').trim();
+  if (!shared) return;
+
+  // Nettoie l'URL pour éviter de ré-ajouter le même code à chaque rechargement
+  history.replaceState({}, '', window.location.pathname);
+
+  if (validateInfoSilent()) {
+    // Une session est déjà en cours : on ajoute directement le code
+    const isDup = scans.some(s => s.code === shared);
+    addScan(shared);
+    navTo(1);
+    showToast(isDup ? '⚠️ Code partagé ajouté (doublon)' : '✓ Code partagé ajouté !');
+  } else {
+    // Pas encore d'infos renseignées : on garde le code en attente
+    sharedCode = shared;
+    showToast('📥 Code reçu — complétez les infos puis "Commencer le scan"');
+  }
+}
+
+// Comme validateInfo() mais sans message d'erreur (utilisé juste pour tester l'état)
+function validateInfoSilent() {
+  const loc = document.getElementById('inp-localisation').value.trim();
+  const bureau = document.getElementById('inp-bureau').value.trim();
+  const occupant = document.getElementById('inp-occupant').value.trim();
+  return !!(loc && bureau && occupant && info && info.loc);
+}
 </script>
 </body>
 </html>
