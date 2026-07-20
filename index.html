@@ -207,7 +207,7 @@
     letter-spacing: 0.8px; color: var(--muted); margin-bottom: 10px;
   }
   .scan-item {
-    display: flex; align-items: center;
+    display: flex; align-items: flex-start;
     background: white; border-radius: 10px;
     padding: 11px 14px; margin-bottom: 8px;
     box-shadow: 0 1px 6px rgba(26,46,74,0.07);
@@ -219,15 +219,16 @@
   .scan-item .barcode-val {
     flex: 1; min-width: 0; font-size: 15px; font-weight: 600;
     font-family: 'Courier New', monospace; color: var(--navy);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    white-space: normal; word-break: break-word; overflow-wrap: anywhere;
+    line-height: 1.35; padding-top: 1px;
   }
-  .scan-item .scan-time { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+  .scan-item .scan-time { font-size: 11px; color: var(--muted); flex-shrink: 0; padding-top: 3px; }
   .scan-item .del-btn {
     background: none; border: none; color: var(--red);
     font-size: 18px; cursor: pointer; padding: 4px; line-height: 1;
     flex-shrink: 0;
   }
-  .scan-icon { font-size: 18px; flex-shrink: 0; }
+  .scan-icon { font-size: 18px; flex-shrink: 0; padding-top: 1px; }
 
   /* DUPLICATES */
   .dup-count-badge {
@@ -886,7 +887,7 @@ function renderScanList() {
     return `
     <div class="scan-item${dup ? ' duplicate' : ''}">
       <span class="scan-icon">${s.code.length > 20 ? '🔲' : '▋'}</span>
-      <span class="barcode-val" title="${s.code}" onclick="showToast('${s.code.replace(/'/g, "\\'")}')">${s.code}</span>
+      <span class="barcode-val" title="${s.code}">${s.code}</span>
       ${dup ? `<span class="dup-tag">DOUBLON ×${counts[s.code]}</span>` : ''}
       <span class="scan-time">${s.time}</span>
       <button class="del-btn" onclick="deleteScan(${realIdx})">✕</button>
